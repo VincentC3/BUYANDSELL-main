@@ -12,7 +12,7 @@
 
 /* ------------------------------------------------------------ [MARKET-SCREEN] */
 function showMarket() {
-  state.page = 'market';
+  S.view = 'market';
   destroyMap('main'); maps.mainLayer = null; maps.mainMe = null;
   updateChrome();
 
@@ -21,7 +21,7 @@ function showMarket() {
   CATS.forEach(function (c) { allIds.push(c.id); });
   allIds.forEach(function (id) {
     var text = id === 'all' ? '✨ All' : catEmoji(id) + ' ' + catLabel(id);
-    catButtons += '<button type="button" data-cat="' + esc(id) + '" class="' + (state.category === id ? 'on' : '') + '">' + esc(text) + '</button>';
+    catButtons += '<button type="button" data-cat="' + esc(id) + '" class="' + (S.category === id ? 'on' : '') + '">' + esc(text) + '</button>';
   });
 
   $('#view').innerHTML =
@@ -30,18 +30,18 @@ function showMarket() {
       '<span class="chip" id="locChip"></span>' +
     '</div>' +
     '<div class="tools">' +
-      '<div class="searchbox">' + ic('search') + '<input class="input" id="q" type="search" placeholder="Search items, places…" value="' + esc(state.search) + '" autocomplete="off"></div>' +
+      '<div class="searchbox">' + ic('search') + '<input class="input" id="q" type="search" placeholder="Search items, places…" value="' + esc(S.q) + '" autocomplete="off"></div>' +
       '<select class="select" id="sort">' +
         '<option value="new">Newest first</option><option value="near">Nearest first</option>' +
         '<option value="low">Price: low to high</option><option value="high">Price: high to low</option><option value="top">Top selling</option>' +
       '</select>' +
       '<div class="seg" role="group">' +
-        '<button type="button" data-pane="grid" class="' + (state.pane === 'grid' ? 'on' : '') + '">' + ic('grid') + ' Items</button>' +
-        '<button type="button" data-pane="map" class="' + (state.pane === 'map' ? 'on' : '') + '">' + ic('map') + ' Map</button>' +
+        '<button type="button" data-pane="grid" class="' + (S.pane === 'grid' ? 'on' : '') + '">' + ic('grid') + ' Items</button>' +
+        '<button type="button" data-pane="map" class="' + (S.panee === 'map' ? 'on' : '') + '">' + ic('map') + ' Map</button>' +
       '</div>' +
     '</div>' +
     '<div class="cats" id="cats">' + catButtons + '</div>' +
-    '<div class="market" id="market" data-pane="' + state.pane + '">' +
+    '<div class="market" id="market" data-pane="' + S.pane + '">' +
       '<div class="grid" id="grid"></div>' +
       '<aside class="mapcol"><div class="mapbox" id="mapbox">' +
         '<div id="mainMap" style="height:100%"></div>' +
@@ -49,12 +49,12 @@ function showMarket() {
       '</div></aside>' +
     '</div>';
 
-  $('#sort').value = state.sort;
+  $('#sort').value = S.sort;
 
   /* typing in the search box */
-  $('#q').addEventListener('input', function (e) { state.search = e.target.value; paintMarket(true); });
+  $('#q').addEventListener('input', function (e) { S.q = e.target.value; paintMarket(true); });
   /* changing the sort */
-  $('#sort').addEventListener('change', function (e) { state.sort = e.target.value; paintMarket(false); });
+  $('#sort').addEventListener('change', function (e) { S.sort = e.target.value; paintMarket(false); });
   /* clicking a category chip */
   $('#cats').addEventListener('click', function (e) {
     var b = e.target.closest('[data-cat]'); if (!b) return;
@@ -66,8 +66,8 @@ function showMarket() {
   /* Items / Map switch (phone) */
   $$('.seg button').forEach(function (b) {
     b.addEventListener('click', function () {
-      state.pane = b.getAttribute('data-pane');
-      $('#market').setAttribute('data-pane', state.pane);
+      S.pane = b.getAttribute('data-pane');
+      $('#market').setAttribute('data-pane', S.pane);
       $$('.seg button').forEach(function (x) { x.classList.toggle('on', x === b); });
       if (maps.main) setTimeout(function () { maps.main.invalidateSize(); }, 50);
     });
@@ -85,19 +85,19 @@ function showMarket() {
 
 /* ------------------------------------------------------------ [MARKET-FILTER] */
 function getFilteredItems() {
-  var q = state.search.trim().toLowerCase();
+  var q = S.q.trim().toLowerCase();
   var list = state.items.filter(function (i) {
     if (state.boughtIds[i.id]) return false;                       // already bought -> hidden
-    if (state.category !== 'all' && catOf(i) !== state.category) return false;
+    if (S.category !== 'all' && catOf(i) !==S.category) return false;
     if (!q) return true;
     var text = i.title + ' ' + (i.description || '') + ' ' + (i.location_label || '') + ' ' + (i.seller_name || '');
     return text.toLowerCase().indexOf(q) >= 0;
   });
-  if (state.sort === 'new')  list.sort(function (a, b) { return new Date(b.created_at) - new Date(a.created_at); });
-  if (state.sort === 'near') list.sort(function (a, b) { return distOf(a) - distOf(b); });
-  if (state.sort === 'low')  list.sort(function (a, b) { return a.price - b.price; });
-  if (state.sort === 'high') list.sort(function (a, b) { return b.price - a.price; });
-  if (state.sort === 'top')  list.sort(function (a, b) { return statOf(b.id).buys - statOf(a.id).buys; });
+  if (S.sort === 'new')  list.sort(function (a, b) { return new Date(b.created_at) - new Date(a.created_at); });
+  if (S.sort === 'near') list.sort(function (a, b) { return distOf(a) - distOf(b); });
+  if (S.sort === 'low')  list.sort(function (a, b) { return a.price - b.price; });
+  if (S.sort === 'high') list.sort(function (a, b) { return b.price - a.price; });
+  if (S.sort === 'top')  list.sort(function (a, b) { return statOf(b.id).buys - statOf(a.id).buys; });
   return list;
 }
 
@@ -116,13 +116,13 @@ function makeCardHtml(it) {
 
 /* ------------------------------------------------------------- [MARKET-PAINT] */
 function paintMarket(fitMap) {
-  if (state.page !== 'market') return;
+  if (S.view !== 'market') return;
   var grid = $('#grid'); if (!grid) return;
   if (!state.loaded) { grid.innerHTML = '<div class="skel"></div><div class="skel"></div><div class="skel"></div>'; return; }
 
   var list = getFilteredItems();
   var count = list.length + (list.length === 1 ? ' item' : ' items');
-  $('#mCount').textContent = state.loadError ? state.loadError : count + (state.search ? ' matching “' + state.search + '”' : ' posted near you');
+  $('#mCount').textContent = state.loadError ? state.loadError : count + (S.q ? ' matching “' + S.q + '”' : ' posted near you');
 
   $('#locChip').innerHTML = state.location.known ? ic('target') + ' Distances from your location' : ic('pin') + ' Distances from ' + esc(C.DEFAULT_CENTER.label);
   $('#locChip').className = 'chip ' + (state.location.known ? 'dist' : 'warm');
@@ -162,7 +162,7 @@ function askLocation(manual) {
   navigator.geolocation.getCurrentPosition(function (p) {
     state.location = { lat: p.coords.latitude, lng: p.coords.longitude, known: true };
     try { localStorage.setItem('palit_loc', JSON.stringify(state.location)); } catch (e) {}
-    if (state.page === 'market') paintMarket(true);
+    if (S.view === 'market') paintMarket(true);
     if (manual) toast('Location updated — distances are now from you.', 'ok');
   }, function () {
     if (manual) toast('Location is blocked. Allow it in your browser settings to see real distances.', 'bad');
