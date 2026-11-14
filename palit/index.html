@@ -3,39 +3,27 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Jomar Sangil Store · Buy and sell near you</title>
-<meta name="description" content="A local marketplace: browse items on a map, see how far the seller is, and sell your own things in minutes.">
+<title>kervi Store · Buy and sell near you</title>
+<meta name="description" content="kervi Store is a local marketplace: browse items on a map, see how far the seller is, and sell your own things in minutes.">
 <meta name="theme-color" content="#3a35c8">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Crect width='64' height='64' rx='16' fill='%233a35c8'/%3E%3Cpath d='M18 26h28l-3 22H21z' fill='%23fff'/%3E%3Cpath d='M25 26a7 7 0 0114 0' fill='none' stroke='%23ff7a3d' stroke-width='4' stroke-linecap='round'/%3E%3C/svg%3E">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@500;600;700;800&family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css">
-<link rel="stylesheet" href="cs/style.css">
+<link rel="stylesheet" href="assets/css/style.css">
 </head>
 <body>
-<!-- The pages are drawn into these 3 boxes by the JavaScript files -->
 <div id="app"></div>
 <div id="modalRoot"></div>
 <div id="toasts" aria-live="polite"></div>
 
-<noscript><p style="padding:2rem;font-family:sans-serif">This store needs JavaScript to run.</p></noscript>
+<noscript><p style="padding:2rem;font-family:sans-serif">kervi Store needs JavaScript to run.</p></noscript>
 
-<!-- Libraries -->
 <script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.45.4/dist/umd/supabase.js"></script>
-
-<!-- Our code. KEEP THIS ORDER: settings, data, tools, pages, main last -->
-<script src="js/config.js"></script>
-<script src="js/data.js"></script>
-<script src="js/helpers.js"></script>
-<script src="js/page-market.js"></script>
-<script src="js/page-item.js"></script>
-<script src="js/page-purchases.js"></script>
-<script src="js/page-ratings.js"></script>
-<script src="js/page-sell.js"></script>
-<script src="js/page-profile.js"></script>
-<script src="js/page-auth.js"></script>
-<script src="js/main.js"></script>
+<script src="assets/js/config.js"></script>
+<script src="assets/js/data.js"></script>
+<script src="assets/js/app.js"></script>
 </body>
 </html>
