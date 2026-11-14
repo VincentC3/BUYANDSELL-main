@@ -111,7 +111,7 @@
     $('#app').innerHTML = `
     <div class="shell">
       <aside class="side no-print">
-        <a class="brand" href="#/market"><span class="logo">${logoSvg('#fff', '#ff7a3d', '#3a35c8')}</span>Palit</a>
+        <a class="brand" href="#/market"><span class="logo">${logoSvg('#fff', '#ff7a3d', '#3a35c8')}</span>Buy N Sell</a>
         <div>
           <h2 class="label">Menu</h2>
           <nav class="nav" aria-label="Main">
@@ -123,7 +123,7 @@
         <div class="side-foot" id="sideFoot"></div>
       </aside>
       <div class="main">
-        <header class="topbar"><a class="brand" href="#/market"><span class="logo">${logoSvg('#fff', '#ff7a3d', '#3a35c8')}</span>Palit</a><div id="topAuth"></div></header>
+        <header class="topbar"><a class="brand" href="#/market"><span class="logo">${logoSvg('#fff', '#ff7a3d', '#3a35c8')}</span>Buy N Sell</a><div id="topAuth"></div></header>
         <main class="view" id="view" tabindex="-1"></main>
       </div>
     </div>
@@ -692,7 +692,7 @@
       <section class="splash" aria-hidden="true">
         <span class="shape t1"></span><span class="shape t2"></span><span class="shape t3"></span><span class="shape t4"></span>
         <span class="shape dot d1"></span><span class="shape dot d2"></span><span class="shape dot d3"></span>
-        <div class="splash-inner"><div class="logo">${logoSvg('#3a35c8', '#ff7a3d', '#fff')}</div><h1>Palit</h1><p>Buy &amp; sell, right in your neighbourhood.</p></div>
+        <div class="splash-inner"><div class="logo">${logoSvg('#3a35c8', '#ff7a3d', '#fff')}</div><h1>Buy N Sell</h1><p>Buy &amp; sell, right in your neighbourhood.</p></div>
       </section>
       <section class="auth-side">
         <div class="auth-card">
