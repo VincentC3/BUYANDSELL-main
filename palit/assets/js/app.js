@@ -92,8 +92,11 @@
   /* -------------------------------------------------------------- map helpers */
   function makeMap(el, center, zoom, opts) {
     const m = L.map(el, Object.assign({ zoomControl: true, attributionControl: true }, opts || {})).setView(center, zoom);
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19, attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>' }).addTo(m);
-    return m;
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{
+  subdomains: 'abcd',
+  maxZoom: 19,
+  attribution: '&copy; OpenStreetMap contributors &copy; CARTO'
+}).addTo(m);
   }
   const pinIcon = (text, cls) => L.divIcon({ className: 'pin ' + (cls || ''), html: '<span>' + esc(text) + '</span>', iconSize: [0, 0] });
   const mapFallback = (msg) => '<div class="map-fallback"><div>' + ic('map') + '<p style="margin-top:.5rem"><b>Map unavailable</b><br>' + esc(msg) + '</p></div></div>';
