@@ -66,6 +66,7 @@
         email: m.email || u.email || '',
         company: m.company || '',
         accountType: m.account_type || 'buyer',
+        needsRole: !m.account_type,   /* true = never chose Buyer/Seller (Google login) */
         avatarUrl: m.avatar_url || '',
         createdAt: u.created_at
       };
@@ -174,6 +175,16 @@
           provider: 'google',
           options: { redirectTo: location.origin + location.pathname }
         }).then(need);
+      },
+
+      /* Saves Buyer/Seller for accounts that never chose one (Google login). */
+      setAccountType: function (type) {
+        var u = needUser();
+        if (type !== 'buyer' && type !== 'seller') return Promise.reject(new Error('Choose Buyer or Seller.'));
+        var row = { id: u.id, username: u.name, email: u.email || null, account_type: type };
+        return sb.from('profiles').upsert(row).then(need).then(function () {
+          return sb.auth.updateUser({ data: { account_type: type } }).then(need);
+        }).then(function () { u.accountType = type; u.needsRole = false; });
       },
 
       /* -------------------------------------------------------- [LIVE-PROFILE] */
@@ -570,6 +581,7 @@
         });
       },
       signOut: function () { return run(function () { db.session = null; save(); fire(); }); },
+      setAccountType: function (type) { var u = me(); if (u) { u.accountType = type; save(); } return Promise.resolve(); },
       signInGoogle: function () { return Promise.reject(new Error('Google login needs Supabase. Use e-mail login in demo mode.')); },
 
       /* profile */

@@ -154,11 +154,51 @@ document.addEventListener('click', function (e) {
 document.addEventListener('keydown', function (e) { if (e.key === 'Escape' && $('#bd')) dismissModal(); });
 window.addEventListener('hashchange', route);
 
+/* -------------------------------------------------------------- [ROLE-PICK]
+   After a first Google login the person has no Buyer/Seller choice yet.
+   Ask once, save it, then the right menu links appear. */
+function askRole() {
+  var u = state.user;
+  if (!u || !u.needsRole || $('#rolePick')) return;
+  var box = document.createElement('div');
+  box.id = 'rolePick';
+  box.setAttribute('role', 'dialog');
+  box.setAttribute('aria-modal', 'true');
+  box.style.cssText = 'position:fixed;inset:0;z-index:9999;background:rgba(15,15,30,.6);display:flex;align-items:center;justify-content:center;padding:1rem';
+  box.innerHTML =
+    '<div style="background:#fff;color:#1b1b2f;border-radius:16px;max-width:380px;width:100%;padding:1.5rem;box-shadow:0 20px 60px rgba(0,0,0,.35);text-align:center">' +
+      '<h2 style="margin:0 0 .4rem;font-size:1.3rem">Welcome, ' + esc(u.name) + '!</h2>' +
+      '<p style="margin:0 0 1rem;color:#555">How will you use ' + esc(C.STORE_NAME) + '?</p>' +
+      '<div id="roleErr" style="color:#c0262d;margin-bottom:.6rem" hidden></div>' +
+      '<div style="display:grid;gap:.6rem">' +
+        '<button class="btn btn-primary btn-lg btn-block" type="button" data-role="buyer">I want to buy</button>' +
+        '<button class="btn btn-soft btn-lg btn-block" type="button" data-role="seller">I want to sell</button>' +
+      '</div>' +
+      '<p style="margin:.9rem 0 0;font-size:.85rem;color:#777">You can change this later in your Profile.</p>' +
+    '</div>';
+  document.body.appendChild(box);
+  box.addEventListener('click', function (e) {
+    var b = e.target.closest('[data-role]');
+    if (!b) return;
+    var type = b.getAttribute('data-role');
+    $$('#rolePick [data-role]').forEach(function (x) { x.disabled = true; });
+    D.setAccountType(type).then(function () {
+      box.remove();
+      toast('Saved. You are a ' + type + '.', 'ok');
+      updateChrome();
+      if (state.page === 'sell' || state.page === 'my-listings' || state.page === 'orders') route();
+    }).catch(function (ex) {
+      var er = $('#roleErr'); er.hidden = false; er.textContent = D.niceError(ex);
+      $$('#rolePick [data-role]').forEach(function (x) { x.disabled = false; });
+    });
+  });
+}
+
 /* ------------------------------------------------------------------- [BOOT] */
 document.title = C.STORE_NAME + ' · Buy and sell near you';
 D.init().then(function (u) {
   state.user = u;
-  D.onAuth(function (nu) { state.user = nu; updateChrome(); });
+  D.onAuth(function (nu) { state.user = nu; updateChrome(); askRole(); });
   var pending = null;
   try { pending = sessionStorage.getItem('palit_next'); sessionStorage.removeItem('palit_next'); } catch (e) {}
   if (u && pending) location.hash = '#' + pending;
@@ -166,6 +206,7 @@ D.init().then(function (u) {
   return loadMyBuying();
 }).then(function () {
   route();
+  askRole();
   return loadItems();
 }).then(function () {
   if (state.page === 'market') paintMarket(true);
