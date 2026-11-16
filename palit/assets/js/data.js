@@ -1,23 +1,35 @@
-/**
- * Data layer. Exposes window.PalitData with the same API in two flavours:
- *   - Supabase (when keys are set in config.js)
- *   - Demo mode (sample data in localStorage) so the site works before Supabase is connected
- */
+/* =====================================================================
+   FILE: data.js  —  DATA LAYER (talks to Supabase, or to the browser in DEMO MODE)
+   ---------------------------------------------------------------------
+   Every other file only calls  PalitData.something()  — never Supabase directly.
+   Both modes have the SAME function names, so the pages never care which one is on.
+
+   MAP OF THIS FILE (search for the [TAG]):
+   [HELPERS]        phone formatter + friendly error messages
+   [LIVE]           real Supabase version
+        [LIVE-AUTH]       init / sign up / log in / log out
+        [LIVE-PROFILE]    get + update the client profile
+        [LIVE-ITEMS]      list / create / UPDATE / DELETE items (seller CRUD) + views
+        [LIVE-BUY]        buy request, my purchases, remove purchase, rate (buyer CRUD)
+        [LIVE-ORDERS]     seller: see requests, ACCEPT / DECLINE / COMPLETE
+   [DEMO]           browser-only version with sample data (no Supabase needed)
+   [PICK-MODE]      chooses LIVE or DEMO at the very bottom
+   ===================================================================== */
 (function () {
   'use strict';
   var C = window.PALIT_CONFIG;
 
-  /* ------------------------------ shared helpers ------------------------------ */
+  /* ---------------------------------------------------------------- [HELPERS] */
   function uid() {
     if (window.crypto && crypto.randomUUID) { try { return crypto.randomUUID(); } catch (e) {} }
     return 'id' + Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
   }
 
-  /** Turns 0917 123 4567 / 63917... / +63917... into +639171234567 (E.164). Returns null if invalid. */
+  /* Turns 0917 123 4567 / 63917... / +63917... into +639171234567. Returns null if invalid. */
   function normalizePhone(raw) {
     var s = String(raw || '').replace(/[^\d+]/g, '');
     if (!s) return null;
-    if (s.charAt(0) === '+') { /* keep */ }
+    if (s.charAt(0) === '+') { /* keep it */ }
     else if (s.indexOf('00') === 0) s = '+' + s.slice(2);
     else if (s.charAt(0) === '0') s = '+63' + s.slice(1);
     else if (s.indexOf('63') === 0) s = '+' + s;
@@ -26,20 +38,23 @@
     return /^\+\d{8,15}$/.test(s) ? s : null;
   }
 
+  /* Turns scary technical errors into plain sentences. Add your own messages here. */
   function niceError(err) {
     var m = (err && (err.message || err.error_description)) || String(err || 'Something went wrong');
     if (/invalid login credentials/i.test(m)) return 'Wrong mobile number / e-mail or password.';
     if (/already registered|already been registered|user already exists/i.test(m)) return 'That mobile number or e-mail is already registered. Try logging in.';
-    if (/phone.*(provider|disabled|not enabled)|unsupported phone provider/i.test(m)) return 'Phone sign-in is not enabled in Supabase yet. See README step 4 (or set AUTH_MODE to "email").';
+    if (/phone.*(provider|disabled|not enabled)|unsupported phone provider/i.test(m)) return 'Phone sign-in is not enabled in Supabase yet. Turn it on, or set AUTH_MODE to "email" in config.js.';
     if (/row-level security/i.test(m)) return 'Permission denied. Make sure you are logged in and schema.sql was run.';
+    if (/transaction_status/i.test(m) && /column/i.test(m)) return 'Database is missing the transaction_status column. Run schema-orders.sql in Supabase.';
     return m;
   }
 
-  /* ================================ SUPABASE ================================== */
+  /* ====================================================================== [LIVE] */
   function makeLive() {
     var sb = window.supabase.createClient(C.SUPABASE_URL, C.SUPABASE_ANON_KEY);
     var user = null;
     var listeners = [];
+    var authWatching = false;
 
     function toUser(u) {
       if (!u) return null;
@@ -49,11 +64,52 @@
         name: m.username || m.full_name || m.name || u.email || u.phone || 'User',
         mobile: u.phone ? '+' + String(u.phone).replace(/^\+/, '') : (m.mobile || ''),
         email: m.email || u.email || '',
-        accountType: m.account_type || 'buyer'
+        company: m.company || '',
+        accountType: m.account_type || 'buyer',
+        avatarUrl: m.avatar_url || '',
+        createdAt: u.created_at
       };
     }
     function need(res) { if (res.error) throw res.error; return res.data; }
     function needUser() { if (!user) throw new Error('Please log in first.'); return user; }
+    function fire() { listeners.forEach(function (fn) { try { fn(user); } catch (e) { console.error(e); } }); }
+
+    /* Builds the app user from the auth user + the profiles row (profile wins). */
+    function loadUser(authUser) {
+      if (!authUser) { user = null; return Promise.resolve(null); }
+      var base = toUser(authUser);
+      return sb.from('profiles').select('username,mobile,email,company,account_type')
+        .eq('id', authUser.id).maybeSingle()
+        .then(function (res) {
+          var p = res.data;
+          if (p) {
+            base.name = p.username || base.name;
+            base.mobile = p.mobile || base.mobile;
+            base.email = p.email || base.email;
+            base.company = p.company || base.company;
+            base.accountType = p.account_type || base.accountType;
+          }
+          user = base; return user;
+        })
+        .catch(function () { user = base; return user; });
+    }
+
+    function itemRow(f) {
+      return {
+        title: f.title, category: f.category,
+        quantity: f.quantity || 1, price: f.price, description: f.description,
+        meetup_notes: f.meetup || null,
+        delivery_options: f.delivery || 'meetup', delivery_fee: f.fee || 0,
+        location_label: f.label || null
+      };
+    }
+
+    function setPurchaseStatus(purchaseId, from, to) {
+      needUser();
+      var q = sb.from('purchases').update({ transaction_status: to }).eq('id', purchaseId);
+      if (from) q = q.eq('transaction_status', from);
+      return q.select().single().then(need);
+    }
 
     return {
       mode: 'supabase',
@@ -62,41 +118,112 @@
       onAuth: function (fn) { listeners.push(fn); },
       user: function () { return user; },
 
+      /* ----------------------------------------------------------- [LIVE-AUTH] */
       init: function () {
-        return sb.auth.getSession().then(function (r) {
-          user = toUser(r.data && r.data.session && r.data.session.user);
-          sb.auth.onAuthStateChange(function (_e, session) {
-            user = toUser(session && session.user);
-            setTimeout(function () { listeners.forEach(function (f) { f(user); }); }, 0);
+        if (!authWatching) {
+          authWatching = true;
+          sb.auth.onAuthStateChange(function (event, session) {
+            if (event !== 'SIGNED_IN' && event !== 'SIGNED_OUT' && event !== 'USER_UPDATED') return;
+            /* setTimeout: never call Supabase directly inside this callback (can deadlock) */
+            setTimeout(function () { loadUser(session && session.user).then(fire); }, 0);
           });
-          return user;
+        }
+        return sb.auth.getSession().then(function (res) {
+          var s = res.data && res.data.session;
+          return loadUser(s && s.user);
         });
       },
 
-      signUp: function (f) {
-        var meta = { username: f.username, email: f.email, company: f.company, account_type: f.accountType, mobile: f.mobile };
-        var req = C.AUTH_MODE === 'email'
-          ? sb.auth.signUp({ email: f.email, password: f.password, options: { data: meta } })
-          : sb.auth.signUp({ phone: f.mobile, password: f.password, options: { data: meta } });
-        return req.then(function (res) {
-          if (res.error) throw res.error;
-          return { signedIn: !!res.data.session };
-        });
-      },
-
-      signIn: function (id, password) {
-        var creds = C.AUTH_MODE === 'email' ? { email: id, password: password } : { phone: id, password: password };
+      signIn: function (id, pw) {
+        var creds = (C.AUTH_MODE === 'email' || String(id).indexOf('@') >= 0)
+          ? { email: id, password: pw } : { phone: id, password: pw };
         return sb.auth.signInWithPassword(creds).then(need);
       },
 
-      signInGoogle: function () {
-        return sb.auth.signInWithOAuth({ provider: 'google', options: { redirectTo: location.origin + location.pathname } }).then(need);
+      signUp: function (f) {
+        var meta = { username: f.username, mobile: f.mobile, email: f.email, company: f.company || null, account_type: f.accountType || 'buyer' };
+        var payload = C.AUTH_MODE === 'email'
+          ? { email: f.email, password: f.password, options: { data: meta } }
+          : { phone: f.mobile, password: f.password, options: { data: meta } };
+        return sb.auth.signUp(payload).then(need).then(function (d) { return { signedIn: !!(d && d.session) }; });
       },
 
-      signOut: function () { return sb.auth.signOut(); },
+      /* Log out ALWAYS works: if Supabase cannot be reached, the saved login is
+         wiped from this browser anyway, so the person is still logged out. */
+      signOut: function () {
+        function wipeLocal() {
+          try {
+            Object.keys(localStorage).forEach(function (k) {
+              if (k.indexOf('sb-') === 0 || k.indexOf('supabase') >= 0) localStorage.removeItem(k);
+            });
+          } catch (e) {}
+          try { sessionStorage.clear(); } catch (e) {}
+          user = null;
+        }
+        return sb.auth.signOut({ scope: 'local' })
+          .catch(function (e) { console.warn('signOut error (ignored):', e); })
+          .then(wipeLocal, wipeLocal);
+      },
 
+      signInGoogle: function () {
+        /* Google cannot send you back to a file on your computer (file:///...). */
+        if (location.protocol === 'file:') {
+          return Promise.reject(new Error('Google login does not work when the page is opened as a file. Run the site with "python -m http.server 8000" and open http://localhost:8000 instead.'));
+        }
+        return sb.auth.signInWithOAuth({
+          provider: 'google',
+          options: { redirectTo: location.origin + location.pathname }
+        }).then(need);
+      },
+
+      /* -------------------------------------------------------- [LIVE-PROFILE] */
+      getProfile: function () {
+        var u = needUser();
+        return sb.from('profiles').select('*').eq('id', u.id).maybeSingle().then(need).then(function (p) {
+          p = p || {};
+          return {
+            name: p.username || u.name, mobile: p.mobile || u.mobile, email: p.email || u.email,
+            company: p.company || u.company || '', accountType: p.account_type || u.accountType,
+            city: p.city || '', bio: p.bio || '', avatarUrl: u.avatarUrl || '', createdAt: p.created_at || u.createdAt
+          };
+        });
+      },
+
+      /* Profile picture: saved in the photo bucket under my own folder,
+         and the link is kept in my account data (no new database column needed). */
+      uploadAvatar: function (blob) {
+        var u = needUser();
+        var path = u.id + '/avatar-' + Date.now() + '.jpg';
+        return sb.storage.from(C.STORAGE_BUCKET).upload(path, blob, { contentType: 'image/jpeg', upsert: true })
+          .then(need)
+          .then(function () {
+            var url = sb.storage.from(C.STORAGE_BUCKET).getPublicUrl(path).data.publicUrl;
+            return sb.auth.updateUser({ data: { avatar_url: url } }).then(need).then(function () {
+              user.avatarUrl = url;
+              return url;
+            });
+          });
+      },
+
+      updateProfile: function (f) {
+        var u = needUser();
+        var row = {
+          id: u.id, username: f.name, mobile: f.mobile || null, email: f.email || null,
+          company: f.company || null, city: f.city || null, bio: f.bio || null
+        };
+        if (f.accountType) row.account_type = f.accountType;
+        return sb.from('profiles').upsert(row).then(need).then(function () {
+          user.name = f.name; user.mobile = f.mobile || ''; user.email = f.email || '';
+          user.company = f.company || '';
+          if (f.accountType) user.accountType = f.accountType;
+          return sb.auth.updateUser({ data: { username: f.name, company: f.company || null } }).catch(function () {});
+        });
+      },
+
+      /* ---------------------------------------------------------- [LIVE-ITEMS] */
       listItems: function () {
-        return sb.from('items').select('*').eq('status', 'available').order('created_at', { ascending: false }).limit(500).then(need);
+        return sb.from('items').select('*').eq('status', 'available')
+          .order('created_at', { ascending: false }).then(need);
       },
 
       getItem: function (id) {
@@ -105,262 +232,530 @@
 
       myItems: function () {
         var u = needUser();
-        return sb.from('items').select('*').eq('seller_id', u.id).order('created_at', { ascending: false }).then(need);
+        return sb.from('items').select('*').eq('seller_id', u.id)
+          .order('created_at', { ascending: false }).then(need);
       },
 
       createItem: function (f, blobs, onProgress) {
         var u = needUser();
         var urls = [];
-        var chain = Promise.resolve();
-        blobs.forEach(function (blob, i) {
-          chain = chain.then(function () {
+        var total = blobs.length || 1;
+
+        /* upload photos one by one so the progress % is real */
+        var chain = blobs.reduce(function (p, blob, n) {
+          return p.then(function () {
             var path = u.id + '/' + uid() + '.jpg';
-            return sb.storage.from(C.STORAGE_BUCKET).upload(path, blob, { contentType: 'image/jpeg', cacheControl: '31536000' }).then(function (r) {
-              if (r.error) throw r.error;
-              urls.push(sb.storage.from(C.STORAGE_BUCKET).getPublicUrl(path).data.publicUrl);
-              if (onProgress) onProgress((i + 1) / (blobs.length + 1));
-            });
+            return sb.storage.from(C.STORAGE_BUCKET).upload(path, blob, { contentType: 'image/jpeg' })
+              .then(need)
+              .then(function () {
+                urls.push(sb.storage.from(C.STORAGE_BUCKET).getPublicUrl(path).data.publicUrl);
+                if (onProgress) onProgress((n + 1) / total);
+              });
           });
-        });
+        }, Promise.resolve());
+
         return chain.then(function () {
-          return sb.from('items').insert({
-            seller_id: u.id, seller_name: u.name, title: f.title, price: f.price, description: f.description,
-            image_urls: urls, lat: f.lat, lng: f.lng, location_label: f.label || null
-          }).select().single().then(need);
+          var row = itemRow(f);
+          row.seller_name = u.name;
+          row.image_urls = urls;
+          row.lat = f.lat; row.lng = f.lng;
+          return sb.from('items').insert(row).select().single().then(need);
         }).then(function (item) {
-          return sb.from('item_contacts').insert({ item_id: item.id, contact_number: f.contact, gmail: f.gmail }).then(function (r) {
-            if (r.error) { sb.from('items').delete().eq('id', item.id); throw r.error; }
-            if (onProgress) onProgress(1);
-            return item;
+          return sb.from('item_contacts')
+            .insert({ item_id: item.id, contact_number: f.contact, gmail: f.gmail })
+            .then(function (res) {
+              if (res.error) {
+                /* contact failed -> remove the half-created item */
+                return sb.from('items').delete().eq('id', item.id).then(function () { throw res.error; });
+              }
+              return item;
+            });
+        });
+      },
+
+      updateItem: function (id, f) {
+        needUser();
+        var row = itemRow(f);
+        if (f.status) row.status = f.status;
+        return sb.from('items').update(row).eq('id', id).select().single().then(need).then(function (item) {
+          return sb.from('item_contacts')
+            .upsert({ item_id: id, contact_number: f.contact, gmail: f.gmail }, { onConflict: 'item_id' })
+            .then(need).then(function () { return item; });
+        });
+      },
+
+      deleteItem: function (id) {
+        needUser();
+        return sb.from('items').select('image_urls').eq('id', id).maybeSingle().then(need).then(function (it) {
+          return sb.from('items').delete().eq('id', id).then(need).then(function () {
+            /* best effort: remove the photos from storage */
+            var marker = '/' + C.STORAGE_BUCKET + '/';
+            var paths = ((it && it.image_urls) || []).map(function (u) {
+              var i = u.indexOf(marker); return i < 0 ? null : decodeURIComponent(u.slice(i + marker.length));
+            }).filter(Boolean);
+            if (paths.length) return sb.storage.from(C.STORAGE_BUCKET).remove(paths).catch(function () {});
           });
         });
       },
 
-      deleteItem: function (id) { return sb.from('items').delete().eq('id', id).then(need); },
-
+      /* seller phone + gmail -> { number, gmail } or null */
       getContact: function (itemId) {
-        needUser();
-        return sb.from('item_contacts').select('contact_number,gmail').eq('item_id', itemId).maybeSingle().then(function (r) {
-          var d = need(r);
-          return d ? { number: d.contact_number, gmail: d.gmail } : null;
-        });
+        return sb.from('item_contacts').select('contact_number,gmail').eq('item_id', itemId)
+          .maybeSingle().then(need).then(function (r) {
+            return r ? { number: r.contact_number, gmail: r.gmail } : null;
+          });
       },
 
-      recordPurchase: function (itemId) {
+      /* +1 view (needs the increment_views function from schema-orders.sql) */
+      addView: function (itemId) {
+        return sb.rpc('increment_views', { p_item_id: itemId }).then(need);
+      },
+
+      /* ------------------------------------------------------------ [LIVE-BUY] */
+
+      /* BUY ITEM - Create pending transaction */
+      recordPurchase: function (itemId, order) {
         var u = needUser();
-        return sb.from('purchases').upsert({ item_id: itemId, buyer_id: u.id }, { onConflict: 'item_id,buyer_id', ignoreDuplicates: true }).then(need);
+        order = order || {};
+
+        return sb.from('purchases')
+          .select('id,transaction_status')
+          .eq('item_id', itemId)
+          .eq('buyer_id', u.id)
+          .in('transaction_status', ['pending', 'accepted'])
+          .maybeSingle()
+          .then(need)
+          .then(function (existing) {
+            if (existing) {
+              throw new Error('You already have an active request for this item.');
+            }
+
+            var row = {
+              item_id: itemId,
+              buyer_id: u.id,
+              delivery_method: order.method === 'delivery' ? 'delivery' : 'meetup',
+              delivery_address: order.method === 'delivery' ? (order.address || null) : null,
+              buyer_note: order.note || null,
+              buyer_name: u.name,
+              buyer_contact: u.mobile || u.email || null,
+              transaction_status: 'pending'
+            };
+
+            return sb.from('purchases').insert(row).then(need);
+          });
       },
 
+      /* BUYER - READ PURCHASES */
+      myPurchases: function () {
+        var u = needUser();
+
+        return sb.from('purchases')
+          .select('created_at,delivery_method,delivery_address,buyer_note,transaction_status,items(*)')
+          .eq('buyer_id', u.id)
+          .order('created_at', { ascending: false })
+          .then(need)
+          .then(function (rows) {
+            var out = [];
+            rows.forEach(function (r) {
+              if (r.items) {
+                out.push({
+                  item: r.items,
+                  boughtAt: r.created_at,
+                  method: r.delivery_method,
+                  address: r.delivery_address,
+                  note: r.buyer_note,
+                  status: r.transaction_status
+                });
+              }
+            });
+            return out;
+          });
+      },
+
+      /* DELETE PURCHASE */
+      removePurchase: function (itemId) {
+        var u = needUser();
+
+        return sb.from('reviews')
+          .delete()
+          .eq('item_id', itemId)
+          .eq('user_id', u.id)
+          .then(function () {
+            return sb.from('purchases')
+              .delete()
+              .eq('item_id', itemId)
+              .eq('buyer_id', u.id)
+              .then(need);
+          });
+      },
+
+      /* STATISTICS */
       stats: function () {
-        return sb.from('item_stats').select('*').then(need).then(function (rows) {
-          var m = {};
-          rows.forEach(function (r) { m[r.item_id] = { buys: r.buys, avg: r.avg_stars, count: r.rating_count }; });
-          return m;
-        });
+        return sb.from('item_stats')
+          .select('*')
+          .then(need)
+          .then(function (rows) {
+            var m = {};
+            rows.forEach(function (r) {
+              m[r.item_id] = { buys: r.buys, avg: r.avg_stars, count: r.rating_count };
+            });
+            return m;
+          });
       },
 
-      myRating: function (itemId) {
+      /* BUYER RATINGS */
+      myRatings: function () {
         var u = needUser();
-        return sb.from('reviews').select('stars').eq('item_id', itemId).eq('user_id', u.id).maybeSingle().then(need).then(function (d) { return d ? d.stars : 0; });
+
+        return sb.from('reviews')
+          .select('item_id,stars')
+          .eq('user_id', u.id)
+          .then(need)
+          .then(function (rows) {
+            var m = {};
+            rows.forEach(function (r) { m[r.item_id] = r.stars; });
+            return m;
+          });
       },
 
       rate: function (itemId, stars) {
         var u = needUser();
-        return sb.from('reviews').upsert({ item_id: itemId, user_id: u.id, stars: stars }, { onConflict: 'item_id,user_id' }).then(need);
-      }
+
+        return sb.from('reviews')
+          .upsert({ item_id: itemId, user_id: u.id, stars: stars }, { onConflict: 'item_id,user_id' })
+          .then(need);
+      },
+
+      removeRating: function (itemId) {
+        var u = needUser();
+
+        return sb.from('reviews')
+          .delete()
+          .eq('item_id', itemId)
+          .eq('user_id', u.id)
+          .then(need);
+      },
+
+      /* SELLER CONTACT (used by My Purchases once the seller accepted) */
+      getSellerContact: function (itemId) {
+        return this.getContact(itemId);
+      },
+
+      /* ---------------------------------------------------------- [LIVE-ORDERS] */
+
+      /* SELLER - View incoming transactions */
+      sellerOrders: function () {
+        var u = needUser();
+
+        return sb.from('items')
+          .select('id')
+          .eq('seller_id', u.id)
+          .then(need)
+          .then(function (mine) {
+            var ids = mine.map(function (i) { return i.id; });
+            if (!ids.length) return [];
+
+            return sb.from('purchases')
+              .select('id,item_id,buyer_id,created_at,delivery_method,delivery_address,buyer_note,buyer_name,buyer_contact,transaction_status')
+              .in('item_id', ids)
+              .order('created_at', { ascending: false })
+              .then(need)
+              .then(function (rows) {
+                return rows.map(function (r) {
+                  return {
+                    purchaseId: r.id,
+                    itemId: r.item_id,
+                    buyerId: r.buyer_id,
+                    boughtAt: r.created_at,
+                    method: r.delivery_method,
+                    address: r.delivery_address,
+                    note: r.buyer_note,
+                    buyerName: r.buyer_name,
+                    buyerContact: r.buyer_contact,
+                    status: r.transaction_status
+                  };
+                });
+              });
+          });
+      },
+
+      /* SELLER - ACCEPT / DECLINE / COMPLETE */
+      acceptPurchase:   function (purchaseId) { return setPurchaseStatus(purchaseId, 'pending',  'accepted'); },
+      rejectPurchase:   function (purchaseId) { return setPurchaseStatus(purchaseId, 'pending',  'rejected'); },
+      completePurchase: function (purchaseId) { return setPurchaseStatus(purchaseId, 'accepted', 'completed'); }
     };
   }
 
-  /* ================================== DEMO ==================================== */
+  /* ====================================================================== [DEMO]
+     Browser-only version. Data is saved in localStorage ("palit_demo_v2").
+     Same function names as the LIVE version. */
   function makeDemo() {
-    var KEY = 'palit_demo_v1', SKEY = 'palit_demo_session_v1';
-
-    function art(emoji, c1, c2) {
-      var svg = "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 400 300'><defs><linearGradient id='g' x1='0' y1='0' x2='1' y2='1'>" +
-        "<stop offset='0' stop-color='" + c1 + "'/><stop offset='1' stop-color='" + c2 + "'/></linearGradient></defs>" +
-        "<rect width='400' height='300' fill='url(#g)'/><circle cx='330' cy='60' r='70' fill='rgba(255,255,255,.14)'/>" +
-        "<text x='200' y='188' font-size='120' text-anchor='middle'>" + emoji + "</text></svg>";
-      return 'data:image/svg+xml;utf8,' + encodeURIComponent(svg);
-    }
-
-    var SELLERS = [
-      { id: 's1', name: 'Ana Cruz',     number: '0917 555 0101', gmail: 'ana.cruz.demo@example.com' },
-      { id: 's2', name: 'Miguel Reyes', number: '0918 555 0102', gmail: 'miguel.reyes.demo@example.com' },
-      { id: 's3', name: 'Joy Santos',   number: '0927 555 0103', gmail: 'joy.santos.demo@example.com' },
-      { id: 's4', name: 'Paolo Lim',    number: '0998 555 0104', gmail: 'paolo.lim.demo@example.com' }
-    ];
-
-    // [title, price, emoji, c1, c2, description, lat, lng, label, sellerIdx, hoursAgo, buys, avg, ratingCount]
-    var SEED = [
-      ['Mountain bike 26"', 8500, '🚲', '#ff9a5a', '#e5239d', 'Lightly used 21-speed mountain bike. New tires, brakes just serviced. Perfect for commuting or weekend trails. Meet-up in Quezon City.', 14.6760, 121.0437, 'Quezon City', 0, 3, 11, 4.6, 8],
-      ['Yamaha acoustic guitar', 3200, '🎸', '#3a35c8', '#7b6cff', 'Great beginner guitar with soft case, extra strings and a clip-on tuner. Small scratch at the back, sounds beautiful.', 14.5547, 121.0244, 'Makati', 1, 8, 9, 4.8, 6],
-      ['Canon DSLR + 18-55mm lens', 14000, '📷', '#1f2a5c', '#3a35c8', 'Canon DSLR with kit lens, battery, charger and bag. ~8,000 shutter count. Great for students and vloggers.', 14.5764, 121.0851, 'Pasig', 2, 20, 6, 4.9, 5],
-      ['Rice cooker 1.8L', 450, '🍚', '#1fbf9f', '#0d8b78', 'Works perfectly. Keep-warm function, includes steamer tray and paddle. Selling because I moved to a dorm.', 14.6042, 120.9822, 'Sampaloc, Manila', 3, 30, 4, 4.2, 3],
-      ['Wooden study desk', 1800, '🪑', '#ffc83d', '#ff7a3d', 'Solid wood study desk with drawer. 120 x 60 cm. Pick-up only. Can help load into a van.', 14.6507, 121.1029, 'Marikina', 0, 41, 3, 4.0, 2],
-      ['PS4 console + 2 controllers', 12500, '🎮', '#171644', '#e5239d', 'PS4 Slim 1TB with two controllers, HDMI cable and 3 games. Tested before meet-up. Reason for selling: upgrading.', 14.5176, 121.0509, 'Taguig', 1, 5, 14, 4.7, 10],
-      ['Standing fan 16"', 600, '🌀', '#7fd6ff', '#3a35c8', 'Quiet 3-speed standing fan, adjustable height, oscillating. Used for one year only.', 14.6488, 120.9830, 'Caloocan', 2, 55, 2, 4.5, 2],
-      ['Leather sling bag', 950, '👜', '#a05a2c', '#d99a5b', 'Genuine leather sling bag, fits 11" tablet. Barely used, no stains.', 14.5794, 121.0359, 'Mandaluyong', 3, 12, 5, 4.4, 4],
-      ['Electric kettle 1.7L', 350, '☕', '#e5239d', '#ff7a3d', 'Stainless electric kettle with auto shut-off. Boils fast. Free delivery within Parañaque for 2 items.', 14.4793, 121.0198, 'Parañaque', 0, 70, 1, 5.0, 1],
-      ['Skateboard complete set', 2200, '🛹', '#22c3a6', '#3a35c8', 'Complete 8.0" skateboard, fresh grip tape, smooth bearings. Helmet included.', 14.5378, 121.0014, 'Pasay', 1, 26, 7, 4.3, 5]
-    ];
-
-    function seedDb() {
-      var now = Date.now();
-      var db = { users: [], items: [], contacts: {}, purchases: [], reviews: [], baseStats: {} };
-      SELLERS.forEach(function (s) { db.users.push({ id: s.id, name: s.name, mobile: s.number, email: s.gmail, password: null, accountType: 'seller' }); });
-      SEED.forEach(function (r, i) {
-        var seller = SELLERS[r[9]], id = 'demo-' + (i + 1);
-        db.items.push({
-          id: id, seller_id: seller.id, seller_name: seller.name, title: r[0], price: r[1], description: r[5],
-          image_urls: [art(r[2], r[3], r[4])], lat: r[6], lng: r[7], location_label: r[8], status: 'available',
-          created_at: new Date(now - r[10] * 3600 * 1000).toISOString()
-        });
-        db.contacts[id] = { number: seller.number, gmail: seller.gmail };
-        db.baseStats[id] = { buys: r[11], avg: r[12], count: r[13] };
-      });
-      return db;
-    }
-
-    function load() {
-      try { var d = JSON.parse(localStorage.getItem(KEY)); if (d && d.items) return d; } catch (e) {}
-      var db = seedDb(); save(db); return db;
-    }
-    function save(db) {
-      try { localStorage.setItem(KEY, JSON.stringify(db)); }
-      catch (e) { throw new Error('Browser storage is full. Delete a demo listing or use fewer/smaller photos.'); }
-    }
-
-    var db = load();
-    var user = null;
+    var KEY = 'palit_demo_v2';
     var listeners = [];
-    function publicUser(u) { return u ? { id: u.id, name: u.name, mobile: u.mobile, email: u.email, accountType: u.accountType } : null; }
-    function emit() { listeners.forEach(function (f) { f(user); }); }
-    function wait(v) { return new Promise(function (res) { setTimeout(function () { res(v); }, 120); }); }
-    function fail(msg) { return Promise.reject(new Error(msg)); }
+    var db;
+
+    function now() { return new Date().toISOString(); }
+    function save() { try { localStorage.setItem(KEY, JSON.stringify(db)); } catch (e) {} }
+    function seed() {
+      var sellerId = 'demo-seller';
+      return {
+        session: null,
+        users: [{ id: sellerId, name: 'Demo Seller', mobile: '+639171234567', email: 'seller@example.com', company: 'Demo Shop',
+                  accountType: 'seller', city: 'Manila', bio: '', password: 'password123', createdAt: now() }],
+        items: [
+          { id: 'demo-1', seller_id: sellerId, seller_name: 'Demo Seller', title: 'Mountain bike 26"', price: 8500,
+            description: 'Well kept bike, new tires.', category: 'hobbies', image_urls: [], lat: 14.5547, lng: 121.0244,
+            location_label: 'Makati', status: 'available', created_at: now(), quantity: 1,
+            meetup_notes: 'Weekdays after 5pm', delivery_options: 'both', delivery_fee: 150, views: 0 },
+          { id: 'demo-2', seller_id: sellerId, seller_name: 'Demo Seller', title: 'Rice cooker', price: 900,
+            description: 'Works perfectly, 1.8 liter.', category: 'home', image_urls: [], lat: 14.6091, lng: 121.0223,
+            location_label: 'Quezon City', status: 'available', created_at: now(), quantity: 1,
+            meetup_notes: '', delivery_options: 'meetup', delivery_fee: 0, views: 0 }
+        ],
+        contacts: { 'demo-1': { number: '+639171234567', gmail: 'seller@example.com' },
+                    'demo-2': { number: '+639171234567', gmail: 'seller@example.com' } },
+        purchases: [], reviews: []
+      };
+    }
+    try { db = JSON.parse(localStorage.getItem(KEY)); } catch (e) { db = null; }
+    if (!db || !db.users) { db = seed(); save(); }
+
+    function me() { return db.users.filter(function (u) { return u.id === db.session; })[0] || null; }
+    function pub(u) {
+      return u && { id: u.id, name: u.name, mobile: u.mobile, email: u.email, company: u.company, accountType: u.accountType, avatarUrl: u.avatarUrl || '', createdAt: u.createdAt };
+    }
+    function needUser() { var u = me(); if (!u) throw new Error('Please log in first.'); return u; }
+    function ok(v) { return Promise.resolve(v); }
+    function run(fn) { try { return ok(fn()); } catch (e) { return Promise.reject(e); } }
+    function fire() { listeners.forEach(function (fn) { try { fn(pub(me())); } catch (e) {} }); }
+    function toDataUrl(blob) {
+      return new Promise(function (res, rej) {
+        var r = new FileReader(); r.onload = function () { res(r.result); }; r.onerror = rej; r.readAsDataURL(blob);
+      });
+    }
+    function setStatus(purchaseId, from, to) {
+      var u = needUser();
+      var p = db.purchases.filter(function (x) { return x.id === purchaseId; })[0];
+      var item = p && db.items.filter(function (i) { return i.id === p.item_id; })[0];
+      if (!p || !item || item.seller_id !== u.id) throw new Error('Permission denied.');
+      if (from && p.transaction_status !== from) throw new Error('This request was already updated (0 rows).');
+      p.transaction_status = to; save(); return p;
+    }
 
     return {
       mode: 'demo',
       normalizePhone: normalizePhone,
       niceError: niceError,
       onAuth: function (fn) { listeners.push(fn); },
-      user: function () { return user; },
+      user: function () { return pub(me()); },
 
-      init: function () {
-        var sid = null; try { sid = localStorage.getItem(SKEY); } catch (e) {}
-        var u = sid && db.users.filter(function (x) { return x.id === sid && x.password; })[0];
-        user = publicUser(u);
-        return Promise.resolve(user);
+      /* auth */
+      init: function () { return ok(pub(me())); },
+      signIn: function (id, pw) {
+        return run(function () {
+          var key = String(id).toLowerCase();
+          var u = db.users.filter(function (x) { return (x.email.toLowerCase() === key || x.mobile === id) && x.password === pw; })[0];
+          if (!u) throw new Error('Invalid login credentials');
+          db.session = u.id; save(); fire();
+        });
       },
-
       signUp: function (f) {
-        var phone = normalizePhone(f.mobile);
-        var dupe = db.users.some(function (u) { return u.password && ((phone && normalizePhone(u.mobile) === phone) || (u.email || '').toLowerCase() === f.email.toLowerCase()); });
-        if (dupe) return fail('That mobile number or e-mail is already registered. Try logging in.');
-        var u = { id: uid(), name: f.username, mobile: f.mobile, email: f.email, company: f.company, accountType: f.accountType, password: f.password };
-        db.users.push(u); save(db);
-        user = publicUser(u);
-        try { localStorage.setItem(SKEY, u.id); } catch (e) {}
-        emit();
-        return wait({ signedIn: true });
+        return run(function () {
+          var dup = db.users.filter(function (x) { return x.email.toLowerCase() === f.email.toLowerCase() || x.mobile === f.mobile; })[0];
+          if (dup) throw new Error('User already registered');
+          var u = { id: uid(), name: f.username, mobile: f.mobile, email: f.email, company: f.company || '',
+                    accountType: f.accountType || 'buyer', city: '', bio: '', password: f.password, createdAt: now() };
+          db.users.push(u); db.session = u.id; save(); fire();
+          return { signedIn: true };
+        });
+      },
+      signOut: function () { return run(function () { db.session = null; save(); fire(); }); },
+      signInGoogle: function () { return Promise.reject(new Error('Google login needs Supabase. Use e-mail login in demo mode.')); },
+
+      /* profile */
+      getProfile: function () {
+        return run(function () {
+          var u = needUser();
+          return { name: u.name, mobile: u.mobile, email: u.email, company: u.company, accountType: u.accountType,
+                   city: u.city || '', bio: u.bio || '', avatarUrl: u.avatarUrl || '', createdAt: u.createdAt };
+        });
+      },
+      uploadAvatar: function (blob) {
+        var u = needUser();
+        return toDataUrl(blob).then(function (url) { u.avatarUrl = url; save(); return url; });
+      },
+      updateProfile: function (f) {
+        return run(function () {
+          var u = needUser();
+          u.name = f.name; u.mobile = f.mobile || ''; u.email = f.email || ''; u.company = f.company || '';
+          u.city = f.city || ''; u.bio = f.bio || '';
+          if (f.accountType) u.accountType = f.accountType;
+          save();
+        });
       },
 
-      signIn: function (id, password) {
-        var phone = normalizePhone(id), low = String(id || '').toLowerCase();
-        var u = db.users.filter(function (x) {
-          return x.password && ((phone && normalizePhone(x.mobile) === phone) || (x.email || '').toLowerCase() === low);
-        })[0];
-        if (!u || u.password !== password) return fail('Wrong mobile number / e-mail or password.');
-        user = publicUser(u);
-        try { localStorage.setItem(SKEY, u.id); } catch (e) {}
-        emit();
-        return wait(true);
-      },
-
-      signInGoogle: function () { return fail('Google login needs Supabase. Add your keys in config.js and enable the Google provider (README step 5).'); },
-
-      signOut: function () {
-        user = null; try { localStorage.removeItem(SKEY); } catch (e) {}
-        emit(); return wait(true);
-      },
-
+      /* items */
       listItems: function () {
-        var list = db.items.filter(function (i) { return i.status === 'available'; })
-          .sort(function (a, b) { return new Date(b.created_at) - new Date(a.created_at); });
-        return wait(list);
+        return run(function () {
+          return db.items.filter(function (i) { return i.status === 'available'; })
+            .sort(function (a, b) { return new Date(b.created_at) - new Date(a.created_at); });
+        });
       },
-
-      getItem: function (id) { return wait(db.items.filter(function (i) { return i.id === id; })[0] || null); },
-
+      getItem: function (id) { return run(function () { return db.items.filter(function (i) { return i.id === id; })[0] || null; }); },
       myItems: function () {
-        if (!user) return fail('Please log in first.');
-        return wait(db.items.filter(function (i) { return i.seller_id === user.id; }));
+        return run(function () {
+          var u = needUser();
+          return db.items.filter(function (i) { return i.seller_id === u.id; })
+            .sort(function (a, b) { return new Date(b.created_at) - new Date(a.created_at); });
+        });
       },
-
       createItem: function (f, blobs, onProgress) {
-        if (!user) return fail('Please log in first.');
-        return Promise.all(blobs.map(function (b) {
-          return new Promise(function (res, rej) { var r = new FileReader(); r.onload = function () { res(r.result); }; r.onerror = rej; r.readAsDataURL(b); });
-        })).then(function (urls) {
-          var item = {
-            id: uid(), seller_id: user.id, seller_name: user.name, title: f.title, price: f.price, description: f.description,
-            image_urls: urls, lat: f.lat, lng: f.lng, location_label: f.label || null, status: 'available', created_at: new Date().toISOString()
-          };
-          db.items.push(item); db.contacts[item.id] = { number: f.contact, gmail: f.gmail };
-          save(db);
+        var u = needUser();
+        return Promise.all(blobs.map(toDataUrl)).then(function (urls) {
           if (onProgress) onProgress(1);
-          return wait(item);
+          var item = {
+            id: uid(), seller_id: u.id, seller_name: u.name, title: f.title, price: f.price, description: f.description,
+            category: f.category, image_urls: urls, lat: f.lat, lng: f.lng, location_label: f.label || null,
+            status: 'available', created_at: now(), quantity: f.quantity || 1,
+            meetup_notes: f.meetup || null, delivery_options: f.delivery || 'meetup', delivery_fee: f.fee || 0, views: 0
+          };
+          db.items.push(item);
+          db.contacts[item.id] = { number: f.contact, gmail: f.gmail };
+          save(); return item;
         });
       },
-
+      updateItem: function (id, f) {
+        return run(function () {
+          var u = needUser();
+          var it = db.items.filter(function (i) { return i.id === id && i.seller_id === u.id; })[0];
+          if (!it) throw new Error('Permission denied (row-level security).');
+          it.title = f.title; it.category = f.category;
+          it.quantity = f.quantity || 1; it.price = f.price; it.description = f.description;
+          it.meetup_notes = f.meetup || null; it.delivery_options = f.delivery || 'meetup';
+          it.delivery_fee = f.fee || 0; it.location_label = f.label || null;
+          if (f.status) it.status = f.status;
+          db.contacts[id] = { number: f.contact, gmail: f.gmail };
+          save(); return it;
+        });
+      },
       deleteItem: function (id) {
-        db.items = db.items.filter(function (i) { return i.id !== id || i.seller_id !== (user && user.id); });
-        delete db.contacts[id]; save(db); return wait(true);
-      },
-
-      getContact: function (itemId) {
-        if (!user) return fail('Please log in first.');
-        return wait(db.contacts[itemId] || null);
-      },
-
-      recordPurchase: function (itemId) {
-        if (!user) return fail('Please log in first.');
-        var it = db.items.filter(function (i) { return i.id === itemId; })[0];
-        if (it && it.seller_id === user.id) return fail('You cannot buy your own listing.');
-        var exists = db.purchases.some(function (p) { return p.item_id === itemId && p.buyer_id === user.id; });
-        if (!exists) { db.purchases.push({ item_id: itemId, buyer_id: user.id, at: Date.now() }); save(db); }
-        return wait(true);
-      },
-
-      stats: function () {
-        var m = {};
-        db.items.forEach(function (i) {
-          var base = db.baseStats[i.id] || { buys: 0, avg: 0, count: 0 };
-          var buys = base.buys + db.purchases.filter(function (p) { return p.item_id === i.id; }).length;
-          var rs = db.reviews.filter(function (r) { return r.item_id === i.id; });
-          var sum = base.avg * base.count + rs.reduce(function (a, r) { return a + r.stars; }, 0);
-          var cnt = base.count + rs.length;
-          m[i.id] = { buys: buys, avg: cnt ? Math.round(sum / cnt * 100) / 100 : 0, count: cnt };
+        return run(function () {
+          var u = needUser();
+          db.items = db.items.filter(function (i) { return !(i.id === id && i.seller_id === u.id); });
+          db.purchases = db.purchases.filter(function (p) { return p.item_id !== id; });
+          db.reviews = db.reviews.filter(function (r) { return r.item_id !== id; });
+          delete db.contacts[id]; save();
         });
-        return wait(m);
+      },
+      getContact: function (itemId) { return run(function () { needUser(); return db.contacts[itemId] || null; }); },
+      getSellerContact: function (itemId) { return this.getContact(itemId); },
+      addView: function (itemId) {
+        return run(function () {
+          var it = db.items.filter(function (i) { return i.id === itemId; })[0];
+          if (it) { it.views = (it.views || 0) + 1; save(); }
+        });
       },
 
-      myRating: function (itemId) {
-        if (!user) return Promise.resolve(0);
-        var r = db.reviews.filter(function (x) { return x.item_id === itemId && x.user_id === user.id; })[0];
-        return wait(r ? r.stars : 0);
+      /* buyer */
+      recordPurchase: function (itemId, order) {
+        return run(function () {
+          var u = needUser(); order = order || {};
+          var item = db.items.filter(function (i) { return i.id === itemId; })[0];
+          if (!item) throw new Error('That listing is no longer available.');
+          if (item.seller_id === u.id) throw new Error('You cannot buy your own listing.');
+          var active = db.purchases.filter(function (p) {
+            return p.item_id === itemId && p.buyer_id === u.id && (p.transaction_status === 'pending' || p.transaction_status === 'accepted');
+          })[0];
+          if (active) throw new Error('You already have an active request for this item.');
+          db.purchases.push({
+            id: uid(), item_id: itemId, buyer_id: u.id, created_at: now(),
+            delivery_method: order.method === 'delivery' ? 'delivery' : 'meetup',
+            delivery_address: order.method === 'delivery' ? (order.address || null) : null,
+            buyer_note: order.note || null, buyer_name: u.name, buyer_contact: u.mobile || u.email || null,
+            transaction_status: 'pending'
+          });
+          save();
+        });
       },
-
+      myPurchases: function () {
+        return run(function () {
+          var u = needUser();
+          return db.purchases.filter(function (p) { return p.buyer_id === u.id; })
+            .sort(function (a, b) { return new Date(b.created_at) - new Date(a.created_at); })
+            .map(function (p) {
+              var item = db.items.filter(function (i) { return i.id === p.item_id; })[0];
+              return item && { item: item, boughtAt: p.created_at, method: p.delivery_method, address: p.delivery_address,
+                               note: p.buyer_note, status: p.transaction_status };
+            }).filter(Boolean);
+        });
+      },
+      removePurchase: function (itemId) {
+        return run(function () {
+          var u = needUser();
+          db.reviews = db.reviews.filter(function (r) { return !(r.item_id === itemId && r.user_id === u.id); });
+          db.purchases = db.purchases.filter(function (p) { return !(p.item_id === itemId && p.buyer_id === u.id); });
+          save();
+        });
+      },
+      stats: function () {
+        return run(function () {
+          var m = {};
+          db.items.forEach(function (i) {
+            var buys = db.purchases.filter(function (p) {
+              return p.item_id === i.id && (p.transaction_status === 'accepted' || p.transaction_status === 'completed');
+            }).length;
+            var rs = db.reviews.filter(function (r) { return r.item_id === i.id; });
+            var sum = rs.reduce(function (a, r) { return a + r.stars; }, 0);
+            m[i.id] = { buys: buys, avg: rs.length ? Math.round(sum / rs.length * 100) / 100 : 0, count: rs.length };
+          });
+          return m;
+        });
+      },
+      myRatings: function () {
+        return run(function () {
+          var u = needUser(), m = {};
+          db.reviews.forEach(function (r) { if (r.user_id === u.id) m[r.item_id] = r.stars; });
+          return m;
+        });
+      },
       rate: function (itemId, stars) {
-        if (!user) return fail('Please log in first.');
-        if (!db.purchases.some(function (p) { return p.item_id === itemId && p.buyer_id === user.id; })) return fail('Only buyers can rate an item.');
-        var r = db.reviews.filter(function (x) { return x.item_id === itemId && x.user_id === user.id; })[0];
-        if (r) r.stars = stars; else db.reviews.push({ item_id: itemId, user_id: user.id, stars: stars });
-        save(db); return wait(true);
-      }
+        return run(function () {
+          var u = needUser();
+          var r = db.reviews.filter(function (x) { return x.item_id === itemId && x.user_id === u.id; })[0];
+          if (r) r.stars = stars; else db.reviews.push({ id: uid(), item_id: itemId, user_id: u.id, stars: stars, created_at: now() });
+          save();
+        });
+      },
+      removeRating: function (itemId) {
+        return run(function () {
+          var u = needUser();
+          db.reviews = db.reviews.filter(function (r) { return !(r.item_id === itemId && r.user_id === u.id); });
+          save();
+        });
+      },
+
+      /* seller orders */
+      sellerOrders: function () {
+        return run(function () {
+          var u = needUser();
+          var mine = db.items.filter(function (i) { return i.seller_id === u.id; }).map(function (i) { return i.id; });
+          return db.purchases.filter(function (p) { return mine.indexOf(p.item_id) >= 0; })
+            .sort(function (a, b) { return new Date(b.created_at) - new Date(a.created_at); })
+            .map(function (p) {
+              return { purchaseId: p.id, itemId: p.item_id, buyerId: p.buyer_id, boughtAt: p.created_at,
+                       method: p.delivery_method, address: p.delivery_address, note: p.buyer_note,
+                       buyerName: p.buyer_name, buyerContact: p.buyer_contact, status: p.transaction_status };
+            });
+        });
+      },
+      acceptPurchase:   function (id) { return run(function () { return setStatus(id, 'pending',  'accepted'); }); },
+      rejectPurchase:   function (id) { return run(function () { return setStatus(id, 'pending',  'rejected'); }); },
+      completePurchase: function (id) { return run(function () { return setStatus(id, 'accepted', 'completed'); }); }
     };
   }
 
+  /* ================================================================ [PICK-MODE] */
   var live = !!(C.SUPABASE_URL && C.SUPABASE_ANON_KEY && window.supabase && window.supabase.createClient);
-  if (C.SUPABASE_URL && C.SUPABASE_ANON_KEY && !live) { console.warn('[Palit] Supabase library failed to load - falling back to demo mode.'); }
+  if (C.SUPABASE_URL && C.SUPABASE_ANON_KEY && !live) { console.warn('Supabase library failed to load - using demo mode.'); }
   window.PalitData = live ? makeLive() : makeDemo();
 })();
