@@ -45,6 +45,7 @@
     if (/already registered|already been registered|user already exists/i.test(m)) return 'That mobile number or e-mail is already registered. Try logging in.';
     if (/phone.*(provider|disabled|not enabled)|unsupported phone provider/i.test(m)) return 'Phone sign-in is not enabled in Supabase yet. Turn it on, or set AUTH_MODE to "email" in config.js.';
     if (/row-level security/i.test(m)) return 'Permission denied. Make sure you are logged in and schema.sql was run.';
+    if (/delivery_tracking|track_(start|position|delivered|destination|is_)/i.test(m) && /(does not exist|schema cache|could not find)/i.test(m)) return 'Delivery tracking is not set up yet. Run schema-tracking.sql in Supabase.';
     if (/transaction_status/i.test(m) && /column/i.test(m)) return 'Database is missing the transaction_status column. Run schema-orders.sql in Supabase.';
     return m;
   }
@@ -361,7 +362,7 @@
         var u = needUser();
 
         return sb.from('purchases')
-          .select('created_at,delivery_method,delivery_address,buyer_note,transaction_status,items(*)')
+          .select('id,created_at,delivery_method,delivery_address,buyer_note,transaction_status,items(*)')
           .eq('buyer_id', u.id)
           .order('created_at', { ascending: false })
           .then(need)
@@ -370,6 +371,7 @@
             rows.forEach(function (r) {
               if (r.items) {
                 out.push({
+                  purchaseId: r.id,
                   item: r.items,
                   boughtAt: r.created_at,
                   method: r.delivery_method,
@@ -488,6 +490,45 @@
                 });
               });
           });
+      },
+
+      /* ------------------------------------------------------- [LIVE-TRACKING]
+         Delivery tracking. All writes go through SQL functions (schema-tracking.sql). */
+      getTracking: function (purchaseId) {
+        return sb.from('delivery_tracking').select('*').eq('purchase_id', purchaseId).maybeSingle().then(need);
+      },
+      sellerTracking: function () {
+        return sb.from('delivery_tracking').select('*').then(need).then(function (rows) {
+          var m = {}; (rows || []).forEach(function (r) { m[r.purchase_id] = r; }); return m;
+        });
+      },
+      startDelivery: function (purchaseId, o) {
+        return sb.rpc('track_start', {
+          p_purchase_id: purchaseId, p_mode: o.mode,
+          p_courier_name: o.courierName || null, p_courier_link: o.courierLink || null, p_tracking_no: o.trackingNo || null
+        }).then(need);
+      },
+      sendPosition: function (purchaseId, p) {
+        return sb.rpc('track_position', {
+          p_purchase_id: purchaseId, p_lat: p.lat, p_lng: p.lng,
+          p_accuracy: p.accuracy == null ? null : p.accuracy,
+          p_heading: p.heading == null ? null : p.heading,
+          p_speed: p.speed == null ? null : p.speed
+        }).then(need);
+      },
+      markDelivered: function (purchaseId) {
+        return sb.rpc('track_delivered', { p_purchase_id: purchaseId }).then(need);
+      },
+      setDeliveryPin: function (purchaseId, lat, lng) {
+        return sb.rpc('track_destination', { p_purchase_id: purchaseId, p_lat: lat, p_lng: lng }).then(need);
+      },
+      /* Live updates for one purchase. Returns a function that stops listening. */
+      watchTracking: function (purchaseId, onRow) {
+        var ch = sb.channel('trk-' + purchaseId + '-' + Date.now())
+          .on('postgres_changes', { event: '*', schema: 'public', table: 'delivery_tracking', filter: 'purchase_id=eq.' + purchaseId },
+            function (payload) { if (payload && payload.new && payload.new.purchase_id) onRow(payload.new); })
+          .subscribe();
+        return function () { try { sb.removeChannel(ch); } catch (e) {} };
       },
 
       /* SELLER - ACCEPT / DECLINE / COMPLETE */
@@ -667,6 +708,15 @@
           if (it) { it.views = (it.views || 0) + 1; save(); }
         });
       },
+
+      /* delivery tracking needs the real Supabase database */
+      getTracking: function () { return Promise.resolve(null); },
+      sellerTracking: function () { return Promise.reject(new Error('Delivery tracking needs Supabase.')); },
+      startDelivery: function () { return Promise.reject(new Error('Delivery tracking needs Supabase.')); },
+      sendPosition: function () { return Promise.reject(new Error('Delivery tracking needs Supabase.')); },
+      markDelivered: function () { return Promise.reject(new Error('Delivery tracking needs Supabase.')); },
+      setDeliveryPin: function () { return Promise.reject(new Error('Delivery tracking needs Supabase.')); },
+      watchTracking: function () { return function () {}; },
 
       /* buyer */
       recordPurchase: function (itemId, order) {

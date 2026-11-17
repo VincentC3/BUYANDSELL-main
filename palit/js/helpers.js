@@ -227,3 +227,36 @@ function loadMyBuying() {
     state.myRatings = res[1];
   }).catch(function (e) { console.error(e); });
 }
+
+/* ------------------------------------------------------------ [TRACK-HELPERS]
+   Small tools shared by the delivery tracking on Orders (seller) and My Purchases (buyer). */
+function safeLink(u) { u = String(u || '').trim(); return /^https?:\/\//i.test(u) ? u : ''; }
+function secsSince(iso) { return iso ? Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 1000)) : null; }
+function agoShort(s) {
+  if (s == null) return '—';
+  if (s < 60) return s + ' s ago';
+  var m = Math.floor(s / 60);
+  if (m < 60) return m + ' min ago';
+  return Math.floor(m / 60) + ' h ago';
+}
+function fmtEta(sec) {
+  var m = Math.max(1, Math.round(sec / 60));
+  if (m < 60) return m + ' min';
+  return Math.floor(m / 60) + ' h ' + (m % 60) + ' min';
+}
+var TRACK_STEPS = [
+  { id: 'preparing', label: 'Preparing' },
+  { id: 'out_for_delivery', label: 'Out for delivery' },
+  { id: 'delivered', label: 'Delivered' }
+];
+function trackStepsHtml(status) {
+  var idx = 0;
+  TRACK_STEPS.forEach(function (s, i) { if (s.id === status) idx = i; });
+  return '<div style="display:flex;gap:.35rem;flex-wrap:wrap;margin:.2rem 0 .5rem">' + TRACK_STEPS.map(function (s, i) {
+    var done = i < idx || (i === idx && status === 'delivered'), cur = i === idx && status !== 'delivered';
+    var bg = cur ? '#3a35c8' : done ? '#d1e7dd' : '#ececf4';
+    var fg = cur ? '#fff' : done ? '#0f5132' : '#6b6b80';
+    return '<span style="padding:4px 10px;border-radius:20px;font-size:12px;font-weight:700;background:' + bg + ';color:' + fg + '">' +
+      (done ? '✓ ' : '') + esc(s.label) + '</span>';
+  }).join('') + '</div>';
+}
