@@ -150,6 +150,18 @@
         return sb.auth.signUp(payload).then(need).then(function (d) { return { signedIn: !!(d && d.session) }; });
       },
 
+      resetPasswordForEmail: function (email, redirectTo) {
+        return sb.auth.resetPasswordForEmail(email, {
+          redirectTo: redirectTo
+        }).then(need);
+      },
+
+      updatePassword: function (newPassword) {
+        return sb.auth.updateUser({
+          password: newPassword
+        }).then(need);
+      },
+
       /* Log out ALWAYS works: if Supabase cannot be reached, the saved login is
          wiped from this browser anyway, so the person is still logged out. */
       signOut: function () {
@@ -611,6 +623,19 @@
           db.session = u.id; save(); fire();
         });
       },
+
+      resetPasswordForEmail: function () {
+        return Promise.reject(
+          new Error('Password recovery requires Supabase mode.')
+        );
+      },
+
+      updatePassword: function () {
+        return Promise.reject(
+          new Error('Password recovery requires Supabase mode.')
+        );
+      },
+
       signUp: function (f) {
         return run(function () {
           var dup = db.users.filter(function (x) { return x.email.toLowerCase() === f.email.toLowerCase() || x.mobile === f.mobile; })[0];
