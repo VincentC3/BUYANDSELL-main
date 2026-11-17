@@ -34,8 +34,10 @@ function profileCompleteness(p) {
 }
 function typeLabel(t) {
   if (t === 'seller') return 'Seller';
+  if (t === 'buyer & seller') return 'Buyer & Seller';
   return 'Buyer';
 }
+
 
 function drawProfile(p, mine) {
   var percent = profileCompleteness(p);
@@ -80,7 +82,7 @@ function drawProfile(p, mine) {
       '<form class="panel-body" id="profileForm" novalidate>' +
         '<div class="form-error" id="pErr" hidden></div>' +
         '<div class="two"><div class="field"><label>Username</label><input class="input" id="pName" maxlength="40" value="' + esc(p.name) + '"></div>' +
-  '<div class="field"><label>Account type</label><input class="input" type="text" value="' + esc(typeLabel(p.accountType)) + '" readonly disabled></div></div>' +
+    '<div class="field"><label>Account type</label><select class="input" id="pType"><option value="buyer"' + (p.accountType === 'buyer' ? ' selected' : '') + '>Buyer</option><option value="seller"' + (p.accountType === 'seller' ? ' selected' : '') + '>Seller</option></select></div></div>' +
         '<div class="two"><div class="field"><label>Mobile number</label><input class="input" id="pMobile" type="tel" value="' + esc(p.mobile) + '"></div>' +
           '<div class="field"><label>E-mail</label><input class="input" id="pEmail" type="email" value="' + esc(p.email) + '"></div></div>' +
         '<div class="two"><div class="field"><label>Company / Shop name</label><input class="input" id="pCompany" maxlength="60" value="' + esc(p.company) + '"></div>' +
@@ -90,6 +92,7 @@ function drawProfile(p, mine) {
       '</form></section>';
 
   $('#profileForm').addEventListener('submit', function (e) { e.preventDefault(); saveProfile(); });
+    if ($('#pType')) $('#pType').value = p.accountType || 'buyer';
 
   /* [PROFILE-PHOTO] Change photo button */
   $('#changePhotoBtn').addEventListener('click', function () { $('#avatarFile').click(); });
@@ -126,23 +129,32 @@ function changeAvatar(file, p) {
 /* ------------------------------------------------------------ [PROFILE-SAVE] */
 function saveProfile() {
   function say(msg) { var el = $('#pErr'); el.hidden = !msg; el.textContent = msg || ''; }
+  var typeEl = $('#pType');
   var f = {
-    name: $('#pName').value.trim(), accountType: (state.user && state.user.accountType) || 'buyer', mobile: $('#pMobile').value.trim(),
-    email: $('#pEmail').value.trim(), company: $('#pCompany').value.trim(), city: $('#pCity').value.trim(), bio: $('#pBio').value.trim()
+    name: $('#pName').value.trim(),
+    accountType: (typeEl && typeEl.value) || (state.user && state.user.accountType) || 'buyer',
+    mobile: $('#pMobile').value.trim(),
+    email: $('#pEmail').value.trim(),
+    company: $('#pCompany').value.trim(),
+    city: $('#pCity').value.trim(),
+    bio: $('#pBio').value.trim()
   };
   if (f.name.length < 3) return say('Username needs at least 3 characters.');
   if (f.mobile && !D.normalizePhone(f.mobile)) return say('Enter a valid mobile number, e.g. 0917 123 4567.');
   if (f.email && !EMAIL_RE.test(f.email)) return say('Enter a valid e-mail address.');
   if (f.mobile) f.mobile = D.normalizePhone(f.mobile);
+  say('');
   var btn = $('#pSave'); btn.disabled = true; btn.textContent = 'Saving…';
- D.updateProfile(f).then(function () {
-  state.user = D.user();
-
-  // Refresh menu based on updated account type
-  updateChrome();
-
-  toast('Profile saved.', 'ok');
-  return loadItems();
-}).catch(function (e) { say(D.niceError(e)); })
-  .then(function () { var b = $('#pSave'); if (b) { b.disabled = false; b.textContent = 'Save profile'; } });
+  D.updateProfile(f).then(function () {
+    state.user = D.user();
+    updateChrome();
+    toast('Profile saved.', 'ok');
+    showProfile();
+  }).catch(function (e) {
+    say(D.niceError(e));
+    toast(D.niceError(e), 'bad');
+  }).then(function () {
+    var b = $('#pSave');
+    if (b) { b.disabled = false; b.textContent = 'Save profile'; }
+  });
 }
