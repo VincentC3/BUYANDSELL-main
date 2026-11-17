@@ -1,9 +1,10 @@
 /* =====================================================================
-   FILE: page-auth.js  —  LOGIN / SIGNUP PAGE  (#/auth)
+   FILE: page-auth.js  —  LOGIN / SIGNUP / FORGOT PASSWORD PAGE  (#/auth)
    ---------------------------------------------------------------------
-   [AUTH-SCREEN]   the page with the Login and Signup forms
+   [AUTH-SCREEN]   the page with the Login, Signup and Forgot forms
    [AUTH-LOGIN]    what happens when you press Login
-   [AUTH-SIGNUP]   what happens when you press Signup  (add signup fields here)
+   [AUTH-SIGNUP]   what happens when you press Signup
+   [AUTH-FORGOT]   what happens when you press "Send reset link"
    After login it goes to the page in the "next" part of the link.
    ===================================================================== */
 
@@ -11,10 +12,12 @@
 function showAuth(params) {
   state.page = 'auth';
   destroyMap('main'); destroyMap('pick');
-  var mode = params.mode === 'signup' ? 'signup' : 'login';
+  var mode = (params.mode === 'signup' || params.mode === 'forgot') ? params.mode : 'login';
   var next = params.next || '/market';
   var phoneMode = C.AUTH_MODE !== 'email';
   var idLabel = phoneMode ? 'Mobile Number' : 'E-mail';
+
+  function titleFor(m) { return m === 'signup' ? 'Signup' : (m === 'forgot' ? 'Forgot Password' : 'Login'); }
 
   $('#app').innerHTML =
     '<div class="auth">' +
@@ -25,12 +28,13 @@ function showAuth(params) {
       '</section>' +
       '<section class="auth-side"><div class="auth-card">' +
         '<div class="auth-top"><button class="back" type="button" id="backBtn">' + ic('back') + ' Back to Market</button></div>' +
-        '<div><h2 id="authTitle">' + (mode === 'signup' ? 'Signup' : 'Login') + '</h2></div>' +
+        '<div><h2 id="authTitle">' + titleFor(mode) + '</h2></div>' +
         (params.buy === '1' ? '<div class="notice">' + ic('lock') + '<span>Log in or sign up to see the seller’s information for this item.</span></div>' : '') +
         '<div class="form-error" id="authErr" role="alert" hidden></div>' +
+        '<div class="notice" id="authOk" role="status" hidden></div>' +
 
         /* ----- LOGIN FORM ----- */
-        '<form class="auth-form" id="loginForm" ' + (mode === 'signup' ? 'hidden' : '') + ' novalidate>' +
+        '<form class="auth-form" id="loginForm" ' + (mode === 'login' ? '' : 'hidden') + ' novalidate>' +
           '<label class="uline">' + ic(phoneMode ? 'mobile' : 'mail') + '<input id="lId" type="' + (phoneMode ? 'tel' : 'email') + '" placeholder="' + idLabel + '" autocomplete="username"></label>' +
           '<label class="uline">' + ic('lock') + '<input id="lPw" type="password" placeholder="Password" autocomplete="current-password"><button class="eye" type="button" data-eye>' + ic('eye') + '</button></label>' +
           '<button class="forgot" type="button" id="forgot">Forgot Password?</button>' +
@@ -40,7 +44,7 @@ function showAuth(params) {
         '</form>' +
 
         /* ----- SIGNUP FORM ----- */
-        '<form class="auth-form" id="signupForm" ' + (mode === 'login' ? 'hidden' : '') + ' novalidate>' +
+        '<form class="auth-form" id="signupForm" ' + (mode === 'signup' ? '' : 'hidden') + ' novalidate>' +
           '<label class="uline">' + ic('user') + '<input id="sName" type="text" placeholder="Username" maxlength="40"></label>' +
           '<label class="uline">' + ic('mobile') + '<input id="sMobile" type="tel" placeholder="Mobile Number"></label>' +
           '<label class="uline">' + ic('mail') + '<input id="sEmail" type="email" placeholder="E-mail"></label>' +
@@ -51,32 +55,79 @@ function showAuth(params) {
           '<button class="btn btn-primary btn-lg btn-block" id="signupBtn" type="submit" style="margin-top:.6rem">Signup</button>' +
           '<p class="switch">Already have an account? <button type="button" data-switch="login">Login</button></p>' +
         '</form>' +
+
+        /* ----- FORGOT PASSWORD FORM ----- */
+        '<form class="auth-form" id="forgotForm" ' + (mode === 'forgot' ? '' : 'hidden') + ' novalidate>' +
+          '<p style="font-size:.8rem;opacity:.7;margin:0 0 .6rem">Enter the e-mail you signed up with. We will send you a link to choose a new password.</p>' +
+          '<label class="uline">' + ic('mail') + '<input id="fEmail" type="email" placeholder="E-mail" autocomplete="email"></label>' +
+          '<button class="btn btn-primary btn-lg btn-block" id="forgotBtn" type="submit" style="margin-top:.6rem">Send reset link</button>' +
+          '<p class="switch">Remembered it? <button type="button" data-switch="login">Login</button></p>' +
+        '</form>' +
       '</div></section>' +
     '</div>';
 
   function err(msg) { var el = $('#authErr'); el.hidden = !msg; el.textContent = msg || ''; }
+  function ok(msg)  { var el = $('#authOk');  el.hidden = !msg; el.textContent = msg || ''; }
   function setMode(m) {
-    $('#loginForm').hidden = m !== 'login'; $('#signupForm').hidden = m !== 'signup';
-    $('#authTitle').textContent = m === 'signup' ? 'Signup' : 'Login'; err('');
+    $('#loginForm').hidden = m !== 'login';
+    $('#signupForm').hidden = m !== 'signup';
+    $('#forgotForm').hidden = m !== 'forgot';
+    $('#authTitle').textContent = titleFor(m); err(''); ok('');
     history.replaceState(null, '', '#/auth?mode=' + m + '&next=' + encodeURIComponent(next) + (params.buy === '1' ? '&buy=1' : ''));
   }
   $$('[data-switch]').forEach(function (b) { b.addEventListener('click', function () { setMode(b.getAttribute('data-switch')); }); });
   $$('[data-eye]').forEach(function (b) {
     b.addEventListener('click', function () { var inp = b.parentElement.querySelector('input'); inp.type = inp.type === 'password' ? 'text' : 'password'; });
   });
-  $('#backBtn').addEventListener('click', function () { go('/market'); });$('#forgot').addEventListener('click', function () {
-  var email = phoneMode ? '' : $('#lId').value.trim();
-  if (!EMAIL_RE.test(email)) email = (prompt('Enter the e-mail you used to sign up:') || '').trim();
-  if (!email) return;
-  if (!EMAIL_RE.test(email)) { err('Enter a valid e-mail address.'); return; }
-  err('');
-  var redirect = location.origin + location.pathname.replace(/[^\/]*$/, '') + 'reset-password.html';
-  D.resetPasswordForEmail(email, redirect)
-    .then(function () { toast('Check your e-mail (pati Spam) for the reset link.', 'ok'); })
-    .catch(function (ex) { err(D.niceError(ex)); });
-}); $('#googleBtn').addEventListener('click', function () {
+  $('#backBtn').addEventListener('click', function () { go('/market'); });
+
+  /* "Forgot Password?" under the login form just opens the forgot form */
+  $('#forgot').addEventListener('click', function () {
+    var v = $('#lId').value.trim();
+    if (EMAIL_RE.test(v)) $('#fEmail').value = v;
+    setMode('forgot');
+  });
+
+  $('#googleBtn').addEventListener('click', function () {
     try { sessionStorage.setItem('palit_next', next); } catch (e) {}
     D.signInGoogle().catch(function (e) { err(D.niceError(e)); });
+  });
+
+  /* ----------------------------------------------------------- [AUTH-FORGOT] */
+  $('#forgotForm').addEventListener('submit', function (e) {
+    e.preventDefault(); err(''); ok('');
+    var email = $('#fEmail').value.trim();
+    if (!EMAIL_RE.test(email)) { err('Enter a valid e-mail address.'); return; }
+
+    /* the page the e-mail link opens (same folder as index.html) */
+    var redirect = location.origin + location.pathname.replace(/[^\/]*$/, '') + 'reset-password.html';
+
+    var btn = $('#forgotBtn'); btn.disabled = true; btn.textContent = 'Sending…';
+
+    /* never hang forever: give up after 20 seconds */
+    var timeout = new Promise(function (_, reject) {
+      setTimeout(function () { reject(new Error('The request timed out. Please check your connection and try again.')); }, 20000);
+    });
+
+    Promise.race([D.resetPasswordForEmail(email, redirect), timeout]).then(function () {
+      ok('If an account exists for ' + email + ', a reset link is on its way. Check your inbox and your Spam folder.');
+      toast('Reset link requested. Check your e-mail.', 'ok');
+      /* wait 60s before allowing another request (Supabase limits e-mails) */
+      var left = 60;
+      var timer = setInterval(function () {
+        var b = document.getElementById('forgotBtn');
+        if (!b) { clearInterval(timer); return; }
+        left--;
+        if (left <= 0) { clearInterval(timer); b.disabled = false; b.textContent = 'Send reset link'; }
+        else b.textContent = 'Resend in ' + left + 's';
+      }, 1000);
+      btn.textContent = 'Resend in 60s';
+    }).catch(function (ex) {
+      var m = D.niceError(ex);
+      if (/rate limit|too many|over_email_send_rate_limit/i.test(m)) m = 'Too many reset requests. Please wait a few minutes and try again.';
+      err(m);
+      btn.disabled = false; btn.textContent = 'Send reset link';
+    });
   });
 
   /* ------------------------------------------------------------ [AUTH-LOGIN] */

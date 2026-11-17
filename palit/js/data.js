@@ -240,7 +240,7 @@
           user.name = f.name; user.mobile = f.mobile || ''; user.email = f.email || '';
           user.company = f.company || '';
           if (f.accountType) user.accountType = f.accountType;
-          return sb.auth.updateUser({ data: { username: f.name, company: f.company || null } }).catch(function () {});
+          return sb.auth.updateUser({ data: { username: f.name, company: f.company || null, account_type: f.accountType || user.accountType } }).catch(function () {});
         });
       },
 
